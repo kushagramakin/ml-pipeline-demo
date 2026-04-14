@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ML Pipeline Guide: Data to Business Value</title>
+
+  <!-- Tailwind CSS (Play CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React 18 + ReactDOM (UMD) -->
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+
+  <!-- Recharts (UMD) — depends on React + ReactDOM being loaded first -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+
+  <!-- Babel standalone (JSX transpiler) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.10/babel.min.js"></script>
+
+  <style>
+    /* Lucide icons are inlined as SVG components — no CDN needed */
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    input[type=range] { accent-color: #6366f1; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback } = React;
+    const {
+      BarChart, Bar, ScatterChart, Scatter,
+      XAxis, YAxis, CartesianGrid, Tooltip,
+      Legend, ResponsiveContainer, Cell
+    } = Recharts;
+
+    /* ── Inline SVG icon helper ─────────────────────────────────────── */
+    const Icon = ({ d, size = 20, color = "currentColor", strokeWidth = 2, extra = "" }) => (
+      <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size}
+        viewBox="0 0 24 24" fill="none" stroke={color}
+        strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round"
+        style={{ display:"inline-block", flexShrink:0 }} className={extra}>
+        {Array.isArray(d) ? d.map((p,i) => <path key={i} d={p}/>) : <path d={d}/>}
+      </svg>
+    );
+
+    /* icon path constants */
+    const IC = {
+      upload:       "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
+      database:     ["M12 2C6.5 2 2 4.2 2 7s4.5 5 10 5 10-2.2 10-5-4.5-5-10-5z","M2 7v5c0 2.8 4.5 5 10 5s10-2.2 10-5V7","M2 12v5c0 2.8 4.5 5 10 5s10-2.2 10-5v-5"],
+      barchart:     ["M12 20V10","M18 20V4","M6 20v-4"],
+      cpu:          ["M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4m0 0h18","M3 9h18M3 15h18"],
+      trending:     "M22 7l-8.5 8.5-5-5L2 17 M16 7h6v6",
+      check:        ["M22 11.08V12a10 10 0 1 1-5.93-9.14","M22 4 12 14.01l-3-3"],
+      chevron:      "M9 18l6-6-6-6",
+      refresh:      "M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15",
+      layers:       ["M12 2 2 7l10 5 10-5-10-5z","M2 17l10 5 10-5","M2 12l10 5 10-5"],
+      target:       ["M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z","M12 18c3.314 0 6-2.686 6-6s-2.686-6-6-6-6 2.686-6 6 2.686 6 6 6z","M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"],
+      alert:        ["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"],
+      zap:          "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
+      users:        ["M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2","M23 21v-2a4 4 0 0 0-3-3.87","M9 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8z","M16 3.13a4 4 0 0 1 0 7.75"],
+      dollar:       ["M12 1v22","M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"],
+      arrow:        "M5 12h14 M12 5l7 7-7 7",
+    };
+
+    /* ── Palette ────────────────────────────────────────────────────── */
+    const COLORS      = ["#6366f1","#f59e0b","#10b981","#ef4444","#3b82f6"];
+    const STAGE_COLORS= ["#6366f1","#f59e0b","#10b981","#3b82f6"];
+
+    /* ── Mock data ──────────────────────────────────────────────────── */
+    const RAW_DATA = Array.from({length:80},(_,i) => ({
+      id: i,
+      processTime: Math.round(10 + ((i*17+31)%90)),
+      errorRate:   +((((i*13+7)%30) + (i%5===0?8:0))).toFixed(1),
+      volume:      50  + ((i*53+11)%950),
+      cost:        200 + ((i*97+23)%1800),
+      missing:     i%7===0 || i%11===0,
+    }));
+    const CLEAN_DATA = RAW_DATA.filter(d => !d.missing);
+
+    const BAR_RAW = [
+      {dept:"Operations",avg:72,errors:18},
+      {dept:"Finance",   avg:45,errors:8 },
+      {dept:"HR",        avg:88,errors:22},
+      {dept:"IT",        avg:31,errors:5 },
+      {dept:"Sales",     avg:65,errors:14},
+      {dept:"Logistics", avg:95,errors:27},
+    ];
+
+    /* ── K-Means (deterministic) ────────────────────────────────────── */
+    function assignClusters(data, k) {
+      const seeds = [{x:20,y:5},{x:80,y:25},{x:50,y:15},{x:30,y:20},{x:70,y:8}];
+      const centres = seeds.slice(0,k);
+      return data.map(d => {
+        let best=0, bestD=Infinity;
+        centres.forEach((c,i)=>{
+          const dist=Math.hypot(d.processTime-c.x, d.errorRate-c.y);
+          if(dist<bestD){bestD=dist;best=i;}
+        });
+        return {...d,cluster:best};
+      });
+    }
+
+    function pcaProject(data) {
+      return data.map(d=>({
+        id:   d.id,
+        pc1:  +(d.processTime*0.6 + d.cost*0.003 - 30).toFixed(2),
+        pc2:  +(d.errorRate*0.8   - d.volume*0.01 + 5).toFixed(2),
+        cluster: d.cluster??0,
+      }));
+    }
+
+    /* ── Business strategies ────────────────────────────────────────── */
+    const STRATEGIES = [
+      {label:"High-Friction Processes",  iconKey:"alert",   color:"#ef4444",bg:"#fef2f2",border:"#fecaca",
+        desc:"Processes with high cycle time and high error rates.",
+        actions:["Immediate RPA automation","Six Sigma root-cause analysis","SLA re-negotiation"],
+        kpi:"Projected cost reduction: 35%"},
+      {label:"Optimisation Candidates",  iconKey:"zap",     color:"#f59e0b",bg:"#fffbeb",border:"#fde68a",
+        desc:"Moderate volume, above-average error rates — quick wins.",
+        actions:["Workflow redesign sprints","AI-assisted triage","KPI dashboard rollout"],
+        kpi:"Projected efficiency gain: 22%"},
+      {label:"High-Volume Efficient",    iconKey:"trending", color:"#10b981",bg:"#ecfdf5",border:"#a7f3d0",
+        desc:"High throughput, low errors — best-practice benchmarks.",
+        actions:["Document & replicate playbooks","Scale headcount strategically","Cross-train other departments"],
+        kpi:"Scalability score: 91/100"},
+      {label:"Strategic Investment",     iconKey:"dollar",  color:"#6366f1",bg:"#eef2ff",border:"#c7d2fe",
+        desc:"Low volume, low errors — niche but high-value processes.",
+        actions:["Evaluate build vs. buy","Integrate with core systems","Pilot AI co-pilot tools"],
+        kpi:"ROI potential: 3.2×"},
+      {label:"Emerging Bottlenecks",     iconKey:"users",   color:"#3b82f6",bg:"#eff6ff",border:"#bfdbfe",
+        desc:"Rising volume with latent inefficiencies — act early.",
+        actions:["Capacity planning review","Process mining deployment","Load balancing audit"],
+        kpi:"Risk mitigation value: $240K"},
+    ];
+
+    /* ══════════════════════════════════════════════════════════════════
+       STAGE COMPONENTS
+    ══════════════════════════════════════════════════════════════════ */
+
+    function Stage1({onComplete}) {
+      const [dragging,  setDragging]  = useState(false);
+      const [uploaded,  setUploaded]  = useState(false);
+      const [progress,  setProgress]  = useState(0);
+
+      const simulate = () => {
+        setUploaded(false); setProgress(0);
+        let p=0;
+        const iv=setInterval(()=>{
+          p+=Math.random()*18; setProgress(Math.min(p,100));
+          if(p>=100){clearInterval(iv);setUploaded(true);onComplete();}
+        },120);
+      };
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Stage 1 — Data Ingestion</h2>
+          <p className="text-gray-500">Simulate uploading a CSV dataset into your ML pipeline.</p>
+
+          <div
+            onDragOver={e=>{e.preventDefault();setDragging(true);}}
+            onDragLeave={()=>setDragging(false)}
+            onDrop={e=>{e.preventDefault();setDragging(false);simulate();}}
+            onClick={simulate}
+            className={`cursor-pointer rounded-2xl border-2 border-dashed p-16 flex flex-col items-center gap-4 transition-all
+              ${dragging?"border-indigo-500 bg-indigo-50":"border-gray-300 bg-gray-50 hover:border-indigo-400 hover:bg-indigo-50"}`}
+          >
+            <Icon d={IC.upload} size={48} color={dragging?"#6366f1":"#9ca3af"}/>
+            <p className="text-lg font-semibold text-gray-600">Drag & drop your CSV here</p>
+            <p className="text-sm text-gray-400">or click to simulate upload</p>
+            <span className="mt-2 px-4 py-1 text-xs rounded-full bg-indigo-100 text-indigo-600 font-mono">
+              business_processes.csv
+            </span>
+          </div>
+
+          {progress>0 && progress<100 && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs text-gray-500">
+                <span>Uploading…</span><span>{Math.round(progress)}%</span>
+              </div>
+              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div className="h-full bg-indigo-500 rounded-full transition-all" style={{width:`${progress}%`}}/>
+              </div>
+            </div>
+          )}
+
+          {uploaded && (
+            <div className="rounded-xl bg-green-50 border border-green-200 p-4 flex items-center gap-3">
+              <Icon d={IC.check} size={22} color="#22c55e"/>
+              <div>
+                <p className="font-semibold text-green-700">Dataset loaded successfully!</p>
+                <p className="text-xs text-green-500">80 rows · 5 features · 13 missing values detected</p>
+              </div>
+            </div>
+          )}
+
+          {uploaded && (
+            <div className="overflow-auto rounded-xl border border-gray-200">
+              <table className="text-xs w-full">
+                <thead className="bg-gray-100 text-gray-600">
+                  <tr>{["ID","Process Time","Error Rate","Volume","Cost","Missing?"].map(h=>(
+                    <th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {RAW_DATA.slice(0,8).map(r=>(
+                    <tr key={r.id} className={`border-t ${r.missing?"bg-red-50":""}`}>
+                      <td className="px-3 py-1.5 text-gray-500">{r.id}</td>
+                      <td className="px-3 py-1.5">{r.processTime}min</td>
+                      <td className="px-3 py-1.5">{r.errorRate}%</td>
+                      <td className="px-3 py-1.5">{r.volume}</td>
+                      <td className="px-3 py-1.5">${r.cost}</td>
+                      <td className="px-3 py-1.5">
+                        {r.missing
+                          ? <span className="text-red-500 font-semibold">⚠ Yes</span>
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-xs text-gray-400 px-3 py-2">Showing 8 of 80 rows</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Stage2({onComplete}) {
+      const [cleaned, setCleaned] = useState(false);
+      const data = cleaned ? CLEAN_DATA : RAW_DATA;
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Stage 2 — Exploratory Data Analysis</h2>
+          <p className="text-gray-500">Visualise your dataset and handle data quality issues before modelling.</p>
+
+          <div className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-200 w-fit">
+            <span className="text-sm font-medium text-gray-600">Clean Missing Values</span>
+            <button onClick={()=>{setCleaned(c=>!c);onComplete();}}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors
+                ${cleaned?"bg-indigo-500":"bg-gray-300"}`}>
+              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform
+                ${cleaned?"translate-x-6":"translate-x-1"}`}/>
+            </button>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium
+              ${cleaned?"bg-green-100 text-green-600":"bg-red-100 text-red-500"}`}>
+              {cleaned?`${CLEAN_DATA.length} rows`:`${RAW_DATA.length} rows (13 missing)`}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6" style={{gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))"}}>
+            <div className="bg-white rounded-2xl border border-gray-200 p-4">
+              <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <Icon d={IC.barchart} size={16} color="#6366f1"/> Avg Process Time by Dept
+              </h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={BAR_RAW}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                  <XAxis dataKey="dept" tick={{fontSize:11}}/>
+                  <YAxis tick={{fontSize:11}}/>
+                  <Tooltip/>
+                  <Bar dataKey="avg" name="Avg Time (min)" fill="#6366f1" radius={[4,4,0,0]}/>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-gray-200 p-4">
+              <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <Icon d={IC.barchart} size={16} color="#f59e0b"/> Error Rate by Dept
+              </h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={BAR_RAW}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                  <XAxis dataKey="dept" tick={{fontSize:11}}/>
+                  <YAxis tick={{fontSize:11}}/>
+                  <Tooltip/>
+                  <Bar dataKey="errors" name="Error Rate (%)" fill="#f59e0b" radius={[4,4,0,0]}/>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-gray-200 p-4" style={{gridColumn:"1/-1"}}>
+              <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <Icon d={IC.target} size={16} color="#10b981"/> Process Time vs Error Rate (scatter)
+              </h3>
+              <ResponsiveContainer width="100%" height={240}>
+                <ScatterChart>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                  <XAxis dataKey="processTime" name="Process Time" unit="m" tick={{fontSize:11}}/>
+                  <YAxis dataKey="errorRate"   name="Error Rate"   unit="%" tick={{fontSize:11}}/>
+                  <Tooltip cursor={{strokeDasharray:"3 3"}}/>
+                  <Scatter data={data} fill={cleaned?"#10b981":"#6366f1"} fillOpacity={0.6}/>
+                </ScatterChart>
+              </ResponsiveContainer>
+              {!cleaned && (
+                <p className="text-xs text-red-400 mt-1">
+                  ⚠ Missing values shown — toggle clean above to remove them
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Stage3({onComplete, k, setK}) {
+      const [algo, setAlgo] = useState("kmeans");
+      const clustered = useMemo(()=>assignClusters(CLEAN_DATA,k),[k]);
+      const pca       = useMemo(()=>pcaProject(clustered),[clustered]);
+      const byCluster = useMemo(()=>{
+        const g={};
+        clustered.forEach(d=>{if(!g[d.cluster])g[d.cluster]=[];g[d.cluster].push(d);});
+        return g;
+      },[clustered]);
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Stage 3 — Unsupervised Learning</h2>
+          <p className="text-gray-500">Apply ML algorithms to discover hidden patterns in your business data.</p>
+
+          <div className="flex gap-3 flex-wrap">
+            {[{id:"kmeans",label:"K-Means Clustering"},{id:"pca",label:"PCA Projection"}].map(a=>(
+              <button key={a.id} onClick={()=>{setAlgo(a.id);onComplete();}}
+                className={`px-4 py-2 rounded-xl font-medium text-sm transition-all
+                  ${algo===a.id?"bg-indigo-600 text-white shadow-md"
+                              :"bg-white border border-gray-200 text-gray-600 hover:border-indigo-300"}`}>
+                {a.label}
+              </button>
+            ))}
+          </div>
+
+          {algo==="kmeans" && (
+            <div className="space-y-5">
+              <div className="flex items-center gap-5 bg-white border border-gray-200 rounded-xl p-4">
+                <Icon d={IC.layers} size={20} color="#6366f1"/>
+                <div className="flex-1">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-700">Number of clusters (k)</span>
+                    <span className="text-lg font-bold text-indigo-600">{k}</span>
+                  </div>
+                  <input type="range" min={2} max={5} value={k}
+                    onChange={e=>setK(+e.target.value)} className="w-full"/>
+                  <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                    <span>2</span><span>5</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-200 p-4">
+                <h3 className="font-semibold text-gray-700 mb-1 flex items-center gap-2">
+                  <Icon d={IC.target} size={16} color="#6366f1"/>K-Means Cluster Plot
+                </h3>
+                <p className="text-xs text-gray-400 mb-3">Each colour = one cluster.</p>
+                <ResponsiveContainer width="100%" height={280}>
+                  <ScatterChart>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                    <XAxis dataKey="processTime" name="Process Time" unit="m" tick={{fontSize:11}}/>
+                    <YAxis dataKey="errorRate"   name="Error Rate"   unit="%" tick={{fontSize:11}}/>
+                    <Tooltip cursor={{strokeDasharray:"3 3"}}/>
+                    <Legend verticalAlign="top"/>
+                    {Array.from({length:k},(_,i)=>(
+                      <Scatter key={i} name={`Cluster ${i+1}`}
+                        data={clustered.filter(d=>d.cluster===i)}
+                        fill={COLORS[i]} fillOpacity={0.75}/>
+                    ))}
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="grid gap-3"
+                style={{gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))"}}>
+                {Array.from({length:k},(_,i)=>(
+                  <div key={i} className="rounded-xl border p-3"
+                    style={{borderColor:COLORS[i]+"55",background:COLORS[i]+"11"}}>
+                    <div className="text-xs font-semibold mb-1" style={{color:COLORS[i]}}>
+                      Cluster {i+1}
+                    </div>
+                    <div className="text-lg font-bold text-gray-800">
+                      {byCluster[i]?.length??0}
+                      <span className="text-xs font-normal text-gray-400"> processes</span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Avg time: {byCluster[i]
+                        ? Math.round(byCluster[i].reduce((s,d)=>s+d.processTime,0)/byCluster[i].length)
+                        : 0}min
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {algo==="pca" && (
+            <div className="space-y-5">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-sm text-indigo-700">
+                <strong>PCA</strong> reduces high-dimensional data to 2 principal components,
+                preserving maximum variance. Points are coloured by their K-Means cluster (k={k}).
+              </div>
+              <div className="bg-white rounded-2xl border border-gray-200 p-4">
+                <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                  <Icon d={IC.cpu} size={16} color="#6366f1"/>PCA Projection — PC1 vs PC2
+                </h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <ScatterChart>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                    <XAxis dataKey="pc1" name="PC1" tick={{fontSize:11}}
+                      label={{value:"PC1 (Process Complexity)",position:"insideBottom",offset:-2,fontSize:11}}/>
+                    <YAxis dataKey="pc2" name="PC2" tick={{fontSize:11}}
+                      label={{value:"PC2 (Error Density)",angle:-90,position:"insideLeft",fontSize:11}}/>
+                    <Tooltip cursor={{strokeDasharray:"3 3"}}/>
+                    <Legend verticalAlign="top"/>
+                    {Array.from({length:k},(_,i)=>(
+                      <Scatter key={i} name={`Cluster ${i+1}`}
+                        data={pca.filter(d=>d.cluster===i)}
+                        fill={COLORS[i]} fillOpacity={0.75}/>
+                    ))}
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                {[
+                  {l:"PC1 explains",v:"61.3%",s:"Variance captured"},
+                  {l:"PC2 explains",v:"24.7%",s:"Variance captured"},
+                  {l:"Total variance",v:"86.0%",s:"Retained in 2D"},
+                  {l:"Dimensions reduced",v:"5 → 2",s:"Features compressed"},
+                ].map(s=>(
+                  <div key={s.l} className="bg-white rounded-xl border border-gray-200 p-3">
+                    <div className="text-xs text-gray-400">{s.l}</div>
+                    <div className="text-2xl font-bold text-indigo-600">{s.v}</div>
+                    <div className="text-xs text-gray-400">{s.s}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Stage4({k}) {
+      const strategies = STRATEGIES.slice(0,k);
+      const total = CLEAN_DATA.length;
+      const sizes = useMemo(()=>{
+        const base=Math.floor(total/k);
+        return Array.from({length:k},(_,i)=>i===k-1?total-(base*(k-1)):base);
+      },[k]);
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Stage 4 — Business Transformation</h2>
+          <p className="text-gray-500">Translate ML clusters into actionable business strategies.</p>
+
+          <div className="rounded-2xl p-5 text-white"
+            style={{background:"linear-gradient(135deg,#6366f1,#7c3aed)"}}>
+            <div className="flex items-center gap-3 mb-3">
+              <Icon d={IC.trending} size={22} color="white"/>
+              <span className="font-bold text-lg">Executive Summary</span>
+            </div>
+            <p className="text-indigo-100 text-sm">
+              Analysis of <strong className="text-white">{total} business processes</strong> across{" "}
+              <strong className="text-white">{k} strategic clusters</strong> reveals significant
+              optimisation potential. Interventions projected to deliver{" "}
+              <strong className="text-white">$1.2M–$2.8M</strong> annual value.
+            </p>
+            <div className="grid grid-cols-3 gap-3 mt-4">
+              {[{l:"Processes Analysed",v:total},{l:"Clusters Identified",v:k},{l:"Depts Impacted",v:6}].map(s=>(
+                <div key={s.l} className="rounded-xl p-3 text-center"
+                  style={{background:"rgba(255,255,255,0.2)"}}>
+                  <div className="text-2xl font-bold">{s.v}</div>
+                  <div className="text-xs" style={{color:"#c7d2fe"}}>{s.l}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {strategies.map((s,i)=>(
+              <div key={i} className="rounded-2xl border p-5"
+                style={{borderColor:s.border,background:s.bg}}>
+                <div className="flex items-start gap-4">
+                  <div className="p-2.5 rounded-xl" style={{background:s.color+"22"}}>
+                    <Icon d={IC[s.iconKey]} size={22} color={s.color}/>
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <h3 className="font-bold text-gray-800">{s.label}</h3>
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium text-white"
+                        style={{background:s.color}}>
+                        Cluster {i+1} · {sizes[i]} processes
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500 mb-3">{s.desc}</p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {s.actions.map(a=>(
+                        <span key={a} className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-white border font-medium text-gray-700">
+                          <Icon d={IC.arrow} size={10} color={s.color}/>{a}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="text-xs font-semibold px-3 py-1.5 rounded-lg inline-block"
+                      style={{background:s.color+"18",color:s.color}}>
+                      📊 {s.kpi}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-200 p-5">
+            <h3 className="font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <Icon d={IC.barchart} size={16} color="#6366f1"/> Cluster Size Distribution
+            </h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={strategies.map((s,i)=>({name:s.label.split(" ")[0],count:sizes[i]}))}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                <XAxis dataKey="name" tick={{fontSize:11}}/>
+                <YAxis tick={{fontSize:11}}/>
+                <Tooltip/>
+                <Bar dataKey="count" name="Processes" radius={[6,6,0,0]}>
+                  {strategies.map((s,i)=><Cell key={i} fill={s.color}/>)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      );
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       ROOT APP
+    ══════════════════════════════════════════════════════════════════ */
+    const STAGES_META = [
+      {id:1,label:"Data Ingestion",   iconKey:"upload",   color:STAGE_COLORS[0]},
+      {id:2,label:"EDA",              iconKey:"barchart", color:STAGE_COLORS[1]},
+      {id:3,label:"Unsupervised ML",  iconKey:"cpu",      color:STAGE_COLORS[2]},
+      {id:4,label:"Business Value",   iconKey:"trending", color:STAGE_COLORS[3]},
+    ];
+
+    function App() {
+      const [active,    setActive]    = useState(1);
+      const [completed, setCompleted] = useState(new Set());
+      const [k,         setK]         = useState(3);
+
+      const complete = useCallback(stage => {
+        setCompleted(p => new Set([...p, stage]));
+      },[]);
+
+      return (
+        <div className="min-h-screen bg-gray-50 flex flex-col">
+          {/* ── Header ── */}
+          <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-3 sticky top-0 z-10">
+            <div className="p-2 rounded-xl bg-indigo-600">
+              <Icon d={IC.database} size={20} color="white"/>
+            </div>
+            <div>
+              <h1 className="font-bold text-gray-900 text-base">ML Pipeline Guide</h1>
+              <p className="text-xs text-gray-400 hidden" style={{display:"block"}}>
+                Data to Business Value · Interactive Wizard
+              </p>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              {STAGES_META.map((s,i)=>(
+                <div key={s.id} className="flex items-center gap-1">
+                  <div className={`w-2.5 h-2.5 rounded-full`}
+                    style={{background: completed.has(s.id)?"#4ade80"
+                                      : active===s.id ? s.color : "#d1d5db"}}/>
+                  {i<STAGES_META.length-1 &&
+                    <div className="w-4 h-px bg-gray-200" style={{display:"inline-block"}}/>}
+                </div>
+              ))}
+            </div>
+          </header>
+
+          <div className="flex flex-1">
+            {/* ── Sidebar ── */}
+            <aside className="w-56 bg-white border-r border-gray-200 p-4 flex flex-col gap-2 sticky top-16 self-start"
+              style={{minHeight:"calc(100vh - 64px)"}}>
+              {STAGES_META.map(s=>{
+                const isActive = active===s.id;
+                const isDone   = completed.has(s.id);
+                return (
+                  <button key={s.id} onClick={()=>setActive(s.id)}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-sm font-medium transition-all
+                      ${isActive?"text-white shadow-md":"text-gray-500 hover:bg-gray-50"}`}
+                    style={isActive?{background:s.color}:{}}>
+                    <Icon d={IC[s.iconKey]} size={17} color={isActive?"white":"#6b7280"}/>
+                    <span>{s.label}</span>
+                    {isDone && !isActive &&
+                      <Icon d={IC.check} size={13} color="#4ade80" extra="ml-auto"/>}
+                  </button>
+                );
+              })}
+              <div className="mt-auto pt-4 border-t border-gray-100">
+                <button onClick={()=>{setCompleted(new Set());setActive(1);}}
+                  className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 px-2">
+                  <Icon d={IC.refresh} size={13} color="#9ca3af"/> Reset pipeline
+                </button>
+              </div>
+            </aside>
+
+            {/* ── Main ── */}
+            <main className="flex-1 p-8 overflow-y-auto" style={{maxWidth:900}}>
+              {active===1 && <Stage1 onComplete={()=>complete(1)}/>}
+              {active===2 && <Stage2 onComplete={()=>complete(2)}/>}
+              {active===3 && <Stage3 onComplete={()=>complete(3)} k={k} setK={v=>{setK(v);complete(3);}}/>}
+              {active===4 && <Stage4 k={k}/>}
+
+              {/* navigation */}
+              <div className="mt-8 flex justify-between">
+                {active>1
+                  ? <button onClick={()=>setActive(a=>a-1)}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50">
+                      ← Previous
+                    </button>
+                  : <div/>}
+                {active<4 &&
+                  <button onClick={()=>{complete(active);setActive(a=>a+1);}}
+                    className="flex items-center gap-2 px-5 py-2 rounded-xl text-white text-sm font-semibold shadow-md hover:opacity-90 transition-opacity"
+                    style={{background:STAGE_COLORS[active-1]}}>
+                    Next Stage
+                    <Icon d={IC.chevron} size={16} color="white"/>
+                  </button>}
+              </div>
+            </main>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
