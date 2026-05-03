@@ -1,0 +1,28 @@
+name: Daily Satta ML Predictor
+
+on:
+  schedule:
+    # Runs at 23:00 UTC every day (Adjust this to your required timezone)
+    - cron: '0 23 * * *'
+  workflow_dispatch: # Allows you to click a button to run it manually
+
+jobs:
+  run-ml-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install pandas numpy scikit-learn firebase-admin
+
+      - name: Run ML Script and Push to Firebase
+        env:
+          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+        run: python main.py
