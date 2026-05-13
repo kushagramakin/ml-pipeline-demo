@@ -25,4 +25,6 @@ jobs:
       - name: Run ML Script and Push to Firebase
         env:
           FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
-        run: python main.py
+        run: |
+          python main.py
+
